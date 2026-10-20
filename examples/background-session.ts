@@ -17,7 +17,9 @@ export async function armBackgroundSession(deviceId: string) {
             acknowledgement: { mode: 'echo', maxAttempts: 3, timeoutMs: 3000 }
         }]
         // Reporting is intentionally absent. No network request is made.
-        // If needed, configure reporting.url for an endpoint you control.
+        // If needed, configure reporting.url, plain headers and an optional
+        // reporting.body JSON object for an endpoint you control. Skip
+        // preflight() when supplying a custom body (see README).
     });
     return background.start();
 }

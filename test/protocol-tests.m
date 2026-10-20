@@ -122,7 +122,8 @@ static void testRetriesAndBoundaries(void) {
 
 static void testDelivery(void) {
     NSMutableDictionary *config = mutableConfiguration();
-    config[@"reporting"] = @{@"url":@"https://example.invalid/events"};
+    config[@"reporting"] = @{@"url":@"https://example.invalid/events",
+        @"headers":@{@"x-auth-token":@"private-test-header"}, @"body":@{@"subject":@"private-test-body"}};
     config[@"metadata"] = @{@"source":@"synthetic-test"}; config[@"includePayload"] = @YES;
     Harness *h = [[Harness alloc] initWithConfiguration:config];
     [h receive:packet(0x42) time:0];
@@ -130,6 +131,8 @@ static void testDelivery(void) {
     check(h.writeCompletions.count == 1 && h.deliveryCompletions.count == 1, @"neither operation waits for the other's completion");
     check([h eventsNamed:@"acknowledgement_written"].count == 0 && [h eventsNamed:@"delivery_succeeded"].count == 0, @"started operations do not falsely report success");
     check([h.deliveries.firstObject[@"payload"] count] == 8 && [h.deliveries.firstObject[@"metadata"][@"source"] isEqual:@"synthetic-test"], @"opt-in packet and app metadata included");
+    NSString *eventJSON = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:h.events options:0 error:nil] encoding:NSUTF8StringEncoding];
+    check(![eventJSON containsString:@"private-test-header"] && ![eventJSON containsString:@"private-test-body"], @"configured headers and custom body do not enter event history");
     void (^failed)(NSError *) = h.deliveryCompletions.firstObject; failed(failure());
     [h finishWrite:nil]; [h receive:packet(0x42) time:1];
     check(h.deliveries.count == 1, @"retransmission never duplicates failed remote delivery");
@@ -176,7 +179,13 @@ static void testValidation(void) {
         @{@"maxEvents":@1}, @{@"maxConnectionFailures":@0}, @{@"reporting":@42},
         @{@"reporting":@{@"url":@"http://example.invalid"}}, @{@"reporting":@{@"url":@"https://user:secret@example.invalid"}},
         @{@"reporting":@{@"url":@"https://example.invalid", @"headers":@{@"bad\nheader":@"x"}}},
-        @{@"reporting":@{@"url":@"https://example.invalid", @"timeoutMs":@0}}
+        @{@"reporting":@{@"url":@"https://example.invalid", @"timeoutMs":@0}},
+        @{@"reporting":@{@"url":@"https://example.invalid", @"body":@"{\"subject\":\"test\"}"}},
+        @{@"reporting":@{@"url":@"https://example.invalid", @"body":@[]}},
+        @{@"reporting":@{@"url":@"https://example.invalid", @"body":NSNull.null}},
+        @{@"reporting":@{@"url":@"https://example.invalid", @"body":@42}},
+        @{@"reporting":@{@"url":@"https://example.invalid", @"body":@{@"bad":@(NAN)}}},
+        @{@"reporting":@{@"url":@"https://example.invalid", @"body":@{@"tooLarge":[@"x" stringByPaddingToLength:65536 withString:@"x" startingAtIndex:0]}}}
     ];
     for (NSDictionary *overrides in invalidOptions) {
         NSMutableDictionary *config = mutableConfiguration(); [config addEntriesFromDictionary:overrides];
@@ -199,6 +208,17 @@ static void testValidation(void) {
     BLEBackgroundProtocol *engine = [[BLEBackgroundProtocol alloc] initWithConfiguration:config error:&error];
     config[@"rules"][0][@"id"] = @"mutated";
     check([engine.configuration[@"rules"][0][@"id"] isEqual:@"example"], @"configuration copied rather than sharing mutable app objects");
+
+    config = mutableConfiguration();
+    config[@"reporting"] = [@{@"url":@"https://example.invalid/actions",
+        @"headers":[@{@"x-auth-token":@"original-test-token"} mutableCopy],
+        @"body":[@{@"nested":[@{@"subject":@"original subject"} mutableCopy], @"attachment":NSNull.null} mutableCopy]} mutableCopy];
+    engine = [[BLEBackgroundProtocol alloc] initWithConfiguration:config error:&error];
+    check(engine != nil, @"custom JSON body and plain headers accepted");
+    config[@"reporting"][@"headers"][@"x-auth-token"] = @"changed";
+    config[@"reporting"][@"body"][@"nested"][@"subject"] = @"changed";
+    check([engine.configuration[@"reporting"][@"headers"][@"x-auth-token"] isEqual:@"original-test-token"], @"headers are captured at configuration time");
+    check([engine.configuration[@"reporting"][@"body"][@"nested"][@"subject"] isEqual:@"original subject"], @"custom body is a deep snapshot of foreground data");
 }
 
 int main(void) {

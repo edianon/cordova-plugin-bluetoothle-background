@@ -15,6 +15,10 @@ export interface Configuration {
     reporting?: {
         url: string;
         headers?: Record<string, string>;
+        /** Optional complete JSON object sent unchanged instead of the incident envelope.
+         * Prepared in the foreground; no interpolation or added event fields.
+         * preflight() rejects without sending when this is supplied. */
+        body?: Record<string, unknown>;
         /** Default false. The app must separately configure ATS for local HTTP. */
         allowInsecureHttp?: boolean;
         /** Default 8000; 100–30000. One POST per incident, no automatic retries. */
@@ -70,7 +74,8 @@ export function stop(): Promise<Status>;
 export function suspend(): Promise<Status>;
 export function getStatus(): Promise<Status>;
 export function clearEvents(): Promise<Status>;
-/** Optional foreground HTTP reachability check; does not start BLE monitoring. */
+/** Optional foreground POST check for the default incident envelope.
+ * Rejects without sending if reporting.body is configured. Does not start BLE. */
 export function preflight(): Promise<{ statusCode: number }>;
 
 declare global {

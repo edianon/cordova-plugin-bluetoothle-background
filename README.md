@@ -149,6 +149,38 @@ reporting: {
 
 This adds one native JSON POST per new incident, independently of acknowledgement. The body contains `event: "notification_received"`, local `incidentId`, `ruleId`, `deviceId`, `receivedAt`, `receivedAppState`, `sentAt`, `sentAppState`, and optional configured metadata/payload. `preflight()` sends a separate `event: "preflight"` request from the foreground without arming Bluetooth. Use an endpoint that treats preflight as a test.
 
+### Custom request body (0.1.1)
+
+If an existing endpoint expects its own JSON fields, prepare its URL, plain headers and body while the app is in the foreground:
+
+```ts
+const reporting = {
+    url: 'https://your-service.example/actions',
+    headers: {
+        'Content-Type': 'application/json',
+        'x-auth-token': 'APP_SUPPLIED_TOKEN'
+    },
+    body: {
+        subject: 'Device notification',
+        description: 'A configured device event was received.',
+        attachment: null
+    },
+    timeoutMs: 8000
+};
+
+await background.configure({ ...deviceConfiguration, reporting });
+// Skip preflight() when reporting.body is supplied.
+await background.start();
+```
+
+Here `background` is the plugin import and `deviceConfiguration` contains the usual device, GATT, framing and rule settings. Configuring or arming does not send this request. The native handler sends it once per new incident, independently of acknowledgement, without needing JavaScript to execute at notification time.
+
+`reporting.body` must be a JSON object, including an empty object if desired. Nested objects, arrays, booleans and null values are supported; the entire configuration still has the 64 KiB limit. Do not pass `JSON.stringify(payload)` or an Angular `HttpHeaders` instance. Convert headers to a plain `Record<string, string>` first. The plugin serializes the body once and sends only those fields: it does not wrap the body, append timestamps or IDs, or substitute event data. With no `body`, the existing incident envelope remains unchanged.
+
+**With a custom body, `preflight()` rejects without sending any request.** A POST to an action endpoint could perform the action just by testing connectivity. Skip that call in the host app; check connectivity separately only through a backend-defined safe mechanism. Default-envelope preflight behavior is unchanged.
+
+The complete configuration is a deep snapshot taken by `configure()`. Request headers and custom body stay in memory and are not added to status events, persisted event history or public OS logs. Changes to the original JavaScript object do not update native configuration; configure again from the foreground after background ownership has ended. The plugin sends the supplied authentication as-is and does not run the app's login/token refresh workflow. No service-specific endpoint, recipient or payload is built into this plugin.
+
 `delivery_started` means the request was initiated. `delivery_succeeded` means an HTTP **2xx response** was received. It does not mean a caregiver received an alert or an emergency service was contacted. An HTTP failure, timeout, cancellation, or expiration records `delivery_failed`. With no destination, `delivery_skipped` is recorded. HTTP redirects are rejected so configured headers cannot be forwarded to another destination. Requests use an ephemeral session and a bounded background execution assertion, not a guaranteed system delivery service.
 
 HTTPS is required by default. A local diagnostic HTTP endpoint also needs `allowInsecureHttp: true` and app-owned ATS/local-network configuration and permissions. This package does not weaken ATS or choose a diagnostic hostname automatically. Configuration and authentication headers stay in memory; they are not written to the event file. Do not put secrets into metadata, payloads, or URL query strings.
@@ -185,7 +217,7 @@ npm run check:types
 npm pack --dry-run
 ```
 
-Native tests require macOS and Xcode/Command Line Tools. Tests use synthetic packets and mocked delivery; they do not use Bluetooth hardware or contact any endpoint. They cover checksums, fragmented/concatenated frames, matching, deduplication boundaries, echo/fixed/no acknowledgements, serialized writes, bounded retries, delivery outcomes, config validation, bridge routing, and installer conflicts/idempotence. Host lifecycle and physical BLE behavior need separate device testing.
+Native tests require macOS and Xcode/Command Line Tools. Tests use synthetic packets and mocked delivery; they do not use Bluetooth hardware or contact any endpoint. They cover checksums, fragmented/concatenated frames, matching, deduplication boundaries, echo/fixed/no acknowledgements, serialized writes, bounded retries, delivery outcomes, config validation, bridge routing, and installer conflicts/idempotence. Request-construction tests cover the default envelope, exact custom JSON bodies, headers, timeout, snapshot behavior and rejection of custom-body preflight. Host lifecycle and physical BLE behavior need separate device testing.
 
 For a device test, first configure **without reporting**. Initialize the existing BLE plugin, select/cache the peripheral, arm, background the app, trigger the configured device event, and inspect `[BLEBackground]` logs. Confirm acknowledgement behavior with the peripheral manufacturer; it may dismiss a device alert. Return to foreground, await `suspend()`, inspect event history and resume ordinary communication. Only then test an explicitly selected diagnostic server. Also test Bluetooth off/on, disconnect/reconnect and foreground transitions without Xcode attached.
 

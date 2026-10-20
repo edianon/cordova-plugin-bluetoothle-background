@@ -1,4 +1,20 @@
-# Initial validation — 2026-10-20
+# Validation
+
+## 0.1.1 — 2026-10-20
+
+| Check | Result |
+| --- | --- |
+| `npm test` | 9 Node tests passed, including forwarding plain URL/headers/body through the existing Cordova service without sending a request. |
+| `npm run test:native` | 101 packet/incident checks and 31 native HTTP request-construction checks passed. Synthetic packets and mocked delivery only; no Bluetooth or network. |
+| `npm run check:types` | Passed using TypeScript 5.6.3, including custom-body configuration and rejection of a serialized string body. |
+| iOS native compile/link | All three Objective-C implementations compiled and linked into an arm64 iOS dynamic library using the iPhoneOS 27 SDK and existing BluetoothLE 6.7.4/Cordova frameworks built for iOS 17.6. Warnings treated as errors, excluding unused callback parameters, upstream deprecations and the existing implicit-self capture warning. This is not a host app build or archive. |
+| `npm pack --dry-run` | Passed; package version 0.1.1 includes the new reporting header/implementation and updated types and documentation. |
+
+New checks cover exact custom JSON object bodies (nested objects/arrays, null, booleans and unicode), no double encoding, URL/headers/timeouts, default-envelope compatibility, default preflight compatibility, custom-body preflight rejection before request creation, malformed/oversized body rejection, configuration snapshots, and keeping custom bodies/authentication headers out of event history. Existing acknowledgement independence, delivery failure, deduplication and later-incident checks run with custom-body reporting configured.
+
+No application sources or installed plugin copies were changed during this update. No support ticket or other live request was sent. Physical iPhone testing of this version, live endpoint delivery, fresh Cordova/Capacitor installation and a complete host app build were not performed; these remain host validation steps after installing 0.1.1. The host must skip `preflight()` when supplying `reporting.body`.
+
+## Initial 0.1.0 validation — 2026-10-20
 
 The standalone package was checked separately from the existing host application. That application's native registration, sources and UI were not migrated or modified during this extraction.
 

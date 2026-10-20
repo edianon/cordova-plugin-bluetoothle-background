@@ -81,6 +81,7 @@ static BOOL booleanOption(id value) { return !value || CFGetTypeID((__bridge CFT
             if ((!https && !http) || !url.host.length || url.user || url.password || url.fragment) problem = @"Use an HTTPS reporting URL, or explicitly allow HTTP. Credentials and fragments are not accepted in the URL.";
             else if (!booleanOption(reporting[@"allowInsecureHttp"])) problem = @"allowInsecureHttp must be a boolean.";
             else if (reporting[@"timeoutMs"] && !integerBetween(reporting[@"timeoutMs"], 100, 30000)) problem = @"reporting.timeoutMs must be 100–30000.";
+            else if (reporting[@"body"] && ![reporting[@"body"] isKindOfClass:NSDictionary.class]) problem = @"reporting.body must be a JSON object, not a serialized string.";
             else if (reporting[@"headers"] && ![reporting[@"headers"] isKindOfClass:NSDictionary.class]) problem = @"reporting.headers must be an object.";
             else for (id key in reporting[@"headers"]) {
                 id header = reporting[@"headers"][key];

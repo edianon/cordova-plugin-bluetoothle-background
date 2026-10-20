@@ -7,3 +7,7 @@ xcrun clang -fobjc-arc -fblocks -Wall -Wextra -Werror -Wno-unused-parameter \
     -framework Foundation -Isrc/ios src/ios/BLEBackgroundProtocol.m test/protocol-tests.m \
     -o "$test_directory/protocol-tests"
 "$test_directory/protocol-tests"
+xcrun clang -fobjc-arc -fblocks -Wall -Wextra -Werror -Wno-unused-parameter \
+    -framework Foundation -Isrc/ios src/ios/BLEBackgroundReporting.m test/reporting-tests.m \
+    -o "$test_directory/reporting-tests"
+"$test_directory/reporting-tests"

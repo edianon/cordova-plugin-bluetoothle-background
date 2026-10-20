@@ -30,3 +30,22 @@ test('native failures and browser-only usage reject clearly', async () => {
     delete global.cordova;
     await assert.rejects(bridge.getStatus(), /native iOS/);
 });
+
+test('configuration passes a plain custom request to native without sending or stringifying it', async t => {
+    const configuration = {
+        deviceId: 'from-app',
+        reporting: {
+            url: 'https://example.invalid/actions',
+            headers: { 'x-auth-token': 'synthetic-token' },
+            body: { subject: 'Test', attachment: null, enabled: false }
+        }
+    };
+    const calls = [];
+    t.after(() => { delete global.cordova; });
+    global.cordova = { exec(resolve, reject, service, method, args) {
+        calls.push({ service, method, args }); resolve({ configured: true });
+    } };
+    await bridge.configure(configuration);
+    assert.deepEqual(calls, [{ service: 'BluetoothLePlugin', method: 'backgroundConfigure', args: [configuration] }]);
+    assert.equal(typeof calls[0].args[0].reporting.body, 'object');
+});

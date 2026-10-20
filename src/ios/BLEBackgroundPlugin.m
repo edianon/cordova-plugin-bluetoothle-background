@@ -1,5 +1,6 @@
 #import "BLEBackgroundPlugin.h"
 #import "BLEBackgroundProtocol.h"
+#import "BLEBackgroundReporting.h"
 #import <UIKit/UIKit.h>
 #import <os/log.h>
 
@@ -278,17 +279,10 @@
 }
 
 - (void)bgPost:(NSDictionary *)payload reporting:(NSDictionary *)reporting completion:(void (^)(NSError *, NSInteger))completion {
-    if (!reporting) { completion([self bgError:@"Reporting is not configured."], 0); return; }
-    NSMutableDictionary *body = [payload mutableCopy];
-    if (!body[@"event"]) body[@"event"] = @"notification_received";
-    body[@"sentAt"] = [NSISO8601DateFormatter.new stringFromDate:NSDate.date];
-    body[@"sentAppState"] = [self bgAppState];
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:reporting[@"url"]]];
-    request.HTTPMethod = @"POST";
-    request.timeoutInterval = [reporting[@"timeoutMs"] ?: @8000 doubleValue] / 1000.0;
-    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    for (NSString *header in reporting[@"headers"]) [request setValue:reporting[@"headers"][header] forHTTPHeaderField:header];
-    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+    NSError *requestError;
+    NSMutableURLRequest *request = [BLEBackgroundReporting requestForIncident:payload reporting:reporting
+        sentAt:[NSISO8601DateFormatter.new stringFromDate:NSDate.date] appState:[self bgAppState] error:&requestError];
+    if (!request) { completion(requestError, 0); return; }
     __block UIBackgroundTaskIdentifier backgroundTask = UIBackgroundTaskInvalid;
     NSURLSessionDataTask *task = [self.bgSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
