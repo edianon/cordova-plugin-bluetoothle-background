@@ -1,0 +1,20 @@
+{
+  "name": "cordova-plugin-bluetoothle-background",
+  "version": "0.1.0",
+  "description": "Configurable iOS background notification matching and acknowledgement companion for cordova-plugin-bluetoothle.",
+  "main": "www/bluetoothle-background.js",
+  "types": "types/index.d.ts",
+  "license": "MIT",
+  "cordova": { "id": "cordova-plugin-bluetoothle-background", "platforms": ["ios"] },
+  "peerDependencies": { "cordova-plugin-bluetoothle": "6.7.4" },
+  "devDependencies": { "typescript": "5.6.3" },
+  "engines": { "node": ">=18" },
+  "keywords": ["ecosystem:cordova", "cordova-ios", "capacitor", "bluetooth", "ble", "background"],
+  "bin": { "bluetoothle-background-configure": "scripts/configure-ios.cjs" },
+  "files": ["plugin.xml", "www", "types", "src", "scripts/configure-ios.cjs", "hooks", "README.md", "VALIDATION.md", "CHANGELOG.md", "LICENSE", "examples"],
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "test:native": "sh scripts/test-native.sh",
+    "check:types": "tsc --noEmit --strict --lib es2020,dom --module commonjs test/types.ts"
+  }
+}

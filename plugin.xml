@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin xmlns="http://apache.org/cordova/ns/plugins/1.0" id="cordova-plugin-bluetoothle-background" version="0.1.0">
+  <name>BluetoothLE Background</name>
+  <description>Configurable native background notification handler for the existing BluetoothLE manager.</description>
+  <license>MIT</license>
+  <dependency id="cordova-plugin-bluetoothle" version="6.7.4" />
+  <js-module src="www/bluetoothle-background.js" name="BluetoothLEBackground">
+    <clobbers target="bluetoothleBackground" />
+  </js-module>
+  <hook type="after_prepare" src="hooks/after-prepare.cjs" />
+  <platform name="ios">
+    <header-file src="src/ios/BLEBackgroundProtocol.h" />
+    <source-file src="src/ios/BLEBackgroundProtocol.m" />
+    <header-file src="src/ios/BLEBackgroundPlugin.h" />
+    <source-file src="src/ios/BLEBackgroundPlugin.m" />
+    <framework src="CoreBluetooth.framework" />
+    <config-file target="*-Info.plist" parent="UIBackgroundModes">
+      <array><string>bluetooth-central</string></array>
+    </config-file>
+  </platform>
+</plugin>
