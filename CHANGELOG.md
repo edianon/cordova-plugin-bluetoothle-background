@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 — Android background monitoring
+
+- Add Android native configurable framing, incident deduplication, serialized bounded ACK writes, and one HTTP POST per incident with the existing JavaScript API. Keep all iOS native sources unchanged.
+- Start a connectedDevice foreground service while the host is visible; native lifecycle transitions activate background monitoring and await teardown before releasing foreground ownership.
+- Integrate through a documented public parent-plugin subclass and generated registration helper, using public disconnect/close actions only. No parent source patch or private-state reflection.
+- Accept Android Bluetooth addresses and provide optional generic notification wording. Request Bluetooth connection permission and handle notification denial independently.
+- Retain exact prepared JSON body/headers, reject custom-body preflight without sending, disable redirects, and keep delivery outcomes separate from BLE ACK success.
+- Add JVM protocol/ownership/mocked HTTP tests and Android Cordova/Capacitor setup tests. No automatic force-stop, reboot or process-death restoration; no physical Android validation yet.
+
 ## 0.1.1
 
 - Add optional `reporting.body` for an app-prepared JSON object sent as the complete native POST body, using the existing URL, headers and timeout configuration.

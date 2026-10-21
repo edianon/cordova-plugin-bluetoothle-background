@@ -1,5 +1,5 @@
 export interface Configuration {
-    /** Cached Core Bluetooth device UUID obtained through the existing plugin. */
+    /** iOS: cached Core Bluetooth UUID. Android: Bluetooth address obtained through the existing plugin. */
     deviceId: string;
     serviceUuid: string;
     notifyCharacteristicUuid: string;
@@ -12,6 +12,11 @@ export interface Configuration {
     metadata?: Record<string, unknown>;
     /** Default false. Received packet bytes can contain private device data. */
     includePayload?: boolean;
+    /** Android foreground-service notification. Does not change iOS behavior. */
+    android?: {
+        notificationTitle?: string;
+        notificationText?: string;
+    };
     reporting?: {
         url: string;
         headers?: Record<string, string>;
@@ -19,7 +24,7 @@ export interface Configuration {
          * Prepared in the foreground; no interpolation or added event fields.
          * preflight() rejects without sending when this is supplied. */
         body?: Record<string, unknown>;
-        /** Default false. The app must separately configure ATS for local HTTP. */
+        /** Default false. The host must separately allow local HTTP in ATS / Android network security settings. */
         allowInsecureHttp?: boolean;
         /** Default 8000; 100–30000. One POST per incident, no automatic retries. */
         timeoutMs?: number;

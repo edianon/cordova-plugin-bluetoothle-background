@@ -1,5 +1,28 @@
 # Validation
 
+## 0.2.0 — Android implementation — 2026-10-21
+
+| Check | Result |
+| --- | --- |
+| Android native protocol/ownership/HTTP | **154 checks passed** with synthetic BLE packets, controlled write/lifecycle callbacks and mocked HttpURLConnection; no Bluetooth or external requests. |
+| iOS native regression | **101 protocol/incident + 31 HTTP construction checks passed**. All iOS native source files are unchanged. |
+| Node bridge/installers | **11 tests passed**, covering Android and iOS registration, conflicts, repeatability, public bridge routing and custom bodies. |
+| Plugin TypeScript definitions | Passed, including Android notification options and the unchanged iOS API. |
+| Host Angular/Jasmine | **76 focused tests passed**, including Android MAC validation/version guard/start failure, preference restoration, Emergency controls and existing iOS/lease/parser behavior. |
+| Host setup hooks | **5 tests passed**, including Android generation and iOS preservation. |
+| Host TypeScript / production web build | App/spec checks and Angular production build passed; existing Sass/CommonJS warnings remain. |
+| Android host builds | **Debug and unsigned minified release APK builds passed** with min SDK 26 and compile/target SDK 36. Release R8 retained the plugin/service names; the shrunk APK retained the notification icon. |
+| Native package integration | All five generated Java sources exactly match this plugin, and generated parent Java matches the installed 6.7.4 parent. APK manifest declares the connectedDevice service and required permissions. |
+| npm package contents | Dry run passed for local 0.2.0, including all Android sources/resource and setup helper. Nothing published. |
+
+Android tests cover every split of the configured frame, concatenation with command responses, checksum and device/service/characteristic rejection, incident/retransmission deduplication, correct echo/fixed/no ACK, serialized writes, bounded retries, independent delivery failure/success, later incidents, masks, configuration snapshots, headers/body preservation, preflight rejection and redirects disabled. Ownership tests cover arming without foreground takeover, retirement before connection, teardown failure/retry, overlapping suspension, resume during handoff, rapid pause/resume and fail-closed retirement.
+
+The host's old single-microtask storage test failed because its mocked storage write had not started when it tried to complete it. It now awaits an explicit write-start signal and verifies the save remains pending. Production GlobalService storage code was not changed.
+
+No app-owned Java/Kotlin, parent source patch, brand/model branch, boot receiver, sticky restart, or process-restoration mechanism was added. No physical Android test, installation on a phone, real support POST or watch SOS was performed. Screen locking, prolonged idle, permission/adapter changes and foreground measurement after handoff still require coordinated device validation. Recents removal varies by device; force-stop/process-death/reboot recovery is not implemented. An ACK may dismiss the peripheral's alert even when delivery fails.
+
+The host uses the unpublished sibling plugin through a local file dependency. No Git commit, GitHub push or npm publication was performed. Build logs are local to the integration workspace session; the host documentation records the integration and its changed-file inventory.
+
 ## 0.1.1 — 2026-10-20
 
 | Check | Result |

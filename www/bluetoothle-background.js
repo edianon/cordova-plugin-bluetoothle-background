@@ -4,7 +4,7 @@ function call(method, options) {
     return new Promise(function (resolve, reject) {
         var root = typeof window !== 'undefined' ? window : globalThis;
         if (!root.cordova || typeof root.cordova.exec !== 'function') {
-            reject(new Error('BluetoothLE Background requires a native iOS Cordova/Capacitor app. Wait for deviceready.'));
+            reject(new Error('BluetoothLE Background requires a native iOS or Android Cordova/Capacitor app. Wait for deviceready.'));
             return;
         }
         root.cordova.exec(resolve, function (error) {

@@ -4,6 +4,13 @@ const path = require('node:path');
 const { configurePaths } = require('../scripts/configure-ios.cjs');
 
 module.exports = function (context) {
+    if (context.opts.platforms.includes('android')) {
+        const root = context.opts.projectRoot;
+        const candidates = ['platforms/android/app/src/main/res/xml/config.xml', 'platforms/android/res/xml/config.xml'].map(file => path.join(root, file));
+        const config = candidates.find(fs.existsSync);
+        if (!config) throw new Error('Cannot locate generated Android config.xml.');
+        require('../scripts/configure-android.cjs').configurePaths({ root, config });
+    }
     if (!context.opts.platforms.includes('ios')) return;
     const root = context.opts.projectRoot;
     const ios = path.join(root, 'platforms/ios');

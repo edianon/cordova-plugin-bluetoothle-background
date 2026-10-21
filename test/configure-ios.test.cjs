@@ -63,7 +63,7 @@ test('file installer validates before writing, pins parent version, and restores
 test('Cordova prepare finds generated app and leaves other platforms alone', t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ble-background-hook-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    hook({ opts: { platforms: ['android'], projectRoot: root } });
+    hook({ opts: { platforms: [], projectRoot: root } });
     const app = path.join(root, 'platforms/ios/Example');
     const parent = path.join(root, 'plugins/cordova-plugin-bluetoothle');
     fs.mkdirSync(app, { recursive: true });

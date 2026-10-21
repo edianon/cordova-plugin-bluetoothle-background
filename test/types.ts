@@ -4,6 +4,7 @@ const configuration: background.Configuration = {
     deviceId: '00000000-0000-4000-8000-000000000001',
     serviceUuid: 'AB00', notifyCharacteristicUuid: 'AB01', writeCharacteristicUuid: 'AB02',
     packetLength: 8, checksum: 'sum8',
+    android: { notificationTitle: 'Device notifications', notificationText: 'Background Bluetooth is enabled' },
     rules: [{ id: 'example', match: { offset: 0, bytes: [0x42] }, acknowledgement: { mode: 'echo' } }],
     reporting: {
         url: 'https://example.invalid/actions',
