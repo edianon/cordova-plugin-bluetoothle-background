@@ -30,7 +30,28 @@ function patchRegistration(xml, restore = false) {
     const original = xml.slice(start, start + param[0].length);
     const changed = original.replace(/(\bvalue\s*=\s*)(['"])(.*?)\2/, (_, prefix, quote) =>
         prefix + quote + (restore ? 'BluetoothLePlugin' : 'BLEBackgroundPlugin') + quote);
-    return xml.slice(0, start) + changed + xml.slice(start + original.length);
+    let result = xml.slice(0, start) + changed + xml.slice(start + original.length);
+    // Native initialization runs when the bridge is constructed, before JS. The
+    // AppDelegate launch entry point handles an even earlier Bluetooth relaunch.
+    const onload = '<param name="onload" value="true" data-ble-background="startup" />';
+    if (restore) result = result.replace(/\s*<param name="onload" value="true" data-ble-background="startup" \/>/, '');
+    else if (!/name\s*=\s*['"]onload['"]/.test(feature[0])) {
+        const closing = result.indexOf('</feature', feature.index);
+        result = result.slice(0, closing) + onload + result.slice(closing);
+    }
+    return result;
+}
+
+function patchAppDelegate(source) {
+    const marker = '// BLEBackground native restoration startup';
+    if (source.includes(marker)) return source;
+    if (!/func application\(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions:/.test(source)) {
+        throw new Error('Expected the Swift application didFinishLaunchingWithOptions method. Add BLEBackgroundPlugin.restoreAtLaunch manually for another host.');
+    }
+    const pattern = /(func application\(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions:[^\n]*\{)/;
+    const changed = source.replace(pattern, '$1\n        ' + marker + '\n        BLEBackgroundPlugin.restore(atLaunch: launchOptions ?? [:])');
+    if (changed === source) throw new Error('Cannot find the native launch body.');
+    return changed.includes('import CordovaPlugins') ? changed : changed.replace('import UIKit', 'import UIKit\nimport CordovaPlugins');
 }
 
 function ensureBluetoothMode(plist) {
@@ -92,7 +113,7 @@ function main(args) {
     console.log('BluetoothLE Background: ' + (options.restore ? 'restored parent registration in ' : 'configured ') + options.config);
 }
 
-module.exports = { patchRegistration, ensureBluetoothMode, configurePaths };
+module.exports = { patchRegistration, patchAppDelegate, ensureBluetoothMode, configurePaths };
 if (require.main === module) {
     try { main(process.argv.slice(2)); }
     catch (error) { console.error('BluetoothLE Background: ' + error.message); process.exitCode = 1; }

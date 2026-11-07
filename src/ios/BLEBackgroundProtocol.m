@@ -104,6 +104,41 @@ static BOOL booleanOption(id value) { return !value || CFGetTypeID((__bridge CFT
 
 - (void)resetStream { [self.pendingBytes setLength:0]; }
 
+- (NSDictionary *)incidentSnapshot {
+    NSMutableDictionary *snapshot = [NSMutableDictionary dictionary];
+    for (NSString *rule in self.incidents) {
+        NSMutableDictionary *state = [self.incidents[rule] mutableCopy];
+        state[@"pending"] = @NO; // A dead process cannot have an in-flight BLE write.
+        snapshot[rule] = state;
+    }
+    return snapshot;
+}
+
+- (BOOL)restoreIncidents:(NSDictionary *)incidents {
+    return [self restoreIncidents:incidents afterRelaunch:YES];
+}
+
+- (BOOL)restoreIncidents:(NSDictionary *)incidents afterRelaunch:(BOOL)afterRelaunch {
+    if (![incidents isKindOfClass:NSDictionary.class]) return NO;
+    NSMutableDictionary *restored = [NSMutableDictionary dictionary];
+    for (NSDictionary *rule in self.configuration[@"rules"]) {
+        NSDictionary *saved = incidents[rule[@"id"]];
+        if (!saved) continue;
+        if (![saved isKindOfClass:NSDictionary.class] || ![saved[@"incidentId"] isKindOfClass:NSString.class] ||
+            ![[NSUUID alloc] initWithUUIDString:saved[@"incidentId"]] || !integerBetween(saved[@"attempts"], 0, 10) ||
+            ![saved[@"context"] isKindOfClass:NSDictionary.class] || ![saved[@"lastReceived"] isKindOfClass:NSNumber.class] ||
+            !booleanOption(saved[@"acknowledged"])) return NO;
+        NSMutableDictionary *state = [saved mutableCopy];
+        state[@"pending"] = @NO;
+        // An unresolved claim remains conservative across process death. A saved
+        // successful ACK permits a later incident after the normal quiet period.
+        if (afterRelaunch) state[@"restored"] = @YES;
+        restored[rule[@"id"]] = state;
+    }
+    self.incidents = restored;
+    return YES;
+}
+
 - (BOOL)matchesRule:(NSDictionary *)rule packet:(NSData *)packet {
     NSDictionary *match = rule[@"match"];
     const uint8_t *bytes = packet.bytes;
@@ -151,12 +186,15 @@ static BOOL booleanOption(id value) { return !value || CFGetTypeID((__bridge CFT
             NSString *ruleID = rule[@"id"];
             NSMutableDictionary *state = self.incidents[ruleID];
             NSTimeInterval quiet = [rule[@"quietPeriodMs"] ?: @5000 doubleValue] / 1000.0;
-            BOOL fresh = !state || (time - [state[@"lastReceived"] doubleValue] >= quiet && ![state[@"pending"] boolValue]);
+            BOOL restoredIncident = [state[@"restored"] boolValue];
+            BOOL fresh = !state || ((!restoredIncident || [state[@"acknowledged"] boolValue]) &&
+                time - [state[@"lastReceived"] doubleValue] >= quiet && ![state[@"pending"] boolValue]);
             if (fresh) {
                 state = [@{@"incidentId":NSUUID.UUID.UUIDString, @"attempts":@0, @"pending":@NO, @"context":[context copy]} mutableCopy];
                 self.incidents[ruleID] = state;
             }
             state[@"lastReceived"] = @(time);
+            state[@"restored"] = @NO;
             NSMutableDictionary *details = [state[@"context"] mutableCopy];
             details[@"deviceId"] = self.configuration[@"deviceId"];
             details[@"ruleId"] = ruleID;
@@ -167,12 +205,25 @@ static BOOL booleanOption(id value) { return !value || CFGetTypeID((__bridge CFT
                 for (NSUInteger index = 0; index < length; index++) [values addObject:@(bytes[index])];
                 details[@"payload"] = values;
             }
-            self.recordEvent(fresh ? @"notification_received" : @"notification_repeated", details);
             NSDictionary *ack = rule[@"acknowledgement"];
             NSUInteger attempts = [state[@"attempts"] unsignedIntegerValue];
-            if (![ack[@"mode"] isEqual:@"none"] && ![state[@"pending"] boolValue] && attempts < [ack[@"maxAttempts"] ?: @3 unsignedIntegerValue]) {
+            BOOL shouldWrite = ![ack[@"mode"] isEqual:@"none"] && ![state[@"pending"] boolValue] && attempts < [ack[@"maxAttempts"] ?: @3 unsignedIntegerValue];
+            if (shouldWrite) state[@"attempts"] = @(attempts + 1);
+            BOOL unclaimed = [state[@"unclaimed"] boolValue];
+            [state removeObjectForKey:@"unclaimed"];
+            if (self.persistIncidents && !self.persistIncidents([self incidentSnapshot])) {
+                // Preserve the incident and retry persistence on a retransmission,
+                // but never submit an unclaimed POST or dismiss the watch alert.
+                state[@"attempts"] = @(attempts);
+                state[@"unclaimed"] = @(fresh || unclaimed);
+                self.recordEvent(@"incident_persistence_failed", @{}); break;
+            }
+            fresh = fresh || unclaimed;
+            self.recordEvent(fresh ? @"notification_received" : @"notification_repeated", details);
+            if (!fresh && restoredIncident) self.recordEvent(@"delivery_deduplicated", @{
+                @"incidentId":state[@"incidentId"], @"reason":[state[@"acknowledged"] boolValue] ? @"within_quiet_period" : @"restored_unresolved"});
+            if (shouldWrite) {
                 state[@"pending"] = @YES;
-                state[@"attempts"] = @(attempts + 1);
                 NSMutableData *ackPacket = [packet mutableCopy];
                 if ([ack[@"mode"] isEqual:@"fixed"]) {
                     [ackPacket setLength:0];
@@ -183,6 +234,14 @@ static BOOL booleanOption(id value) { return !value || CFGetTypeID((__bridge CFT
                 void (^completion)(NSError *) = ^(NSError *error) {
                     state[@"pending"] = @NO;
                     if (error) writeDetails[@"error"] = error.localizedDescription;
+                    else {
+                        id previous = state[@"acknowledged"];
+                        state[@"acknowledged"] = @YES;
+                        if (self.persistIncidents && !self.persistIncidents([self incidentSnapshot])) {
+                            state[@"acknowledged"] = previous ?: @NO;
+                            self.recordEvent(@"incident_completion_persistence_failed", @{@"incidentId":state[@"incidentId"]});
+                        }
+                    }
                     self.recordEvent(error ? @"acknowledgement_failed" : @"acknowledgement_written", writeDetails);
                 };
                 NSDictionary *job = @{@"packet":ackPacket, @"timeout":ack[@"timeoutMs"] ?: @3000, @"details":writeDetails, @"completion":[completion copy]};

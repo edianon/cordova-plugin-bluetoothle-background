@@ -5,17 +5,18 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { patchRegistration, ensureBluetoothMode, configurePaths } = require('../scripts/configure-ios.cjs');
+const { patchRegistration, patchAppDelegate, ensureBluetoothMode, configurePaths } = require('../scripts/configure-ios.cjs');
 const hook = require('../hooks/after-prepare.cjs');
 const xml = '<widget><feature name="Other"><param name="ios-package" value="Unchanged" /></feature>\n<feature name="BluetoothLePlugin"><param name="ios-package" value="BluetoothLePlugin" /></feature></widget>';
 const plist = '<?xml version="1.0"?><plist version="1.0"><dict><key>UIBackgroundModes</key><array><string>audio</string></array><key>Other</key><true/></dict></plist>';
 
 test('registration changes only the parent class, is repeatable and reversible', () => {
     const changed = patchRegistration(xml);
-    assert.equal(changed, xml.replace('value="BluetoothLePlugin"', 'value="BLEBackgroundPlugin"'));
+    assert.match(changed, /value="BLEBackgroundPlugin"/);
+    assert.match(changed, /name="onload" value="true"/);
     assert.equal(patchRegistration(changed), changed);
     assert.equal(patchRegistration(changed, true), xml);
-    assert.equal(patchRegistration(xml.replaceAll('"', "'")), changed.replaceAll('"', "'"));
+    assert.equal(patchRegistration(patchRegistration(xml.replaceAll('"', "'")), true), xml.replaceAll('"', "'"));
     const commented = '<!-- <feature name="BluetoothLePlugin"><param name="ios-package" value="Example"/></feature> -->' + xml;
     assert.ok(patchRegistration(commented).startsWith('<!--'));
 });
@@ -95,4 +96,13 @@ test('CLI runs on custom paths and skips Capacitor Android hooks', t => {
     const skipped = spawnSync(process.execPath, [script, '--root', root], { env: { ...environment, CAPACITOR_PLATFORM_NAME: 'android' } });
     assert.equal(skipped.status, 0);
     assert.equal(fs.readFileSync(path.join(root, 'custom.xml'), 'utf8'), xml);
+});
+
+ test('native launch patch preserves host initialization and is repeatable', () => {
+    const source = 'import UIKit\nclass AppDelegate {\n    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {\n        FirebaseApp.configure()\n        return true\n    }\n}';
+    const changed = patchAppDelegate(source);
+    assert.match(changed, /import CordovaPlugins/);
+    assert.ok(changed.indexOf('BLEBackgroundPlugin.restore') < changed.indexOf('FirebaseApp.configure()'));
+    assert.equal(patchAppDelegate(changed), changed);
+    assert.throws(() => patchAppDelegate('unexpected host'), /Expected/);
 });

@@ -16,9 +16,12 @@ test('all methods reuse the existing BluetoothLePlugin service', async () => {
     await bridge.getStatus();
     await bridge.clearEvents();
     await bridge.preflight();
-    assert.deepEqual(calls.map(call => call.service), Array(7).fill('BluetoothLePlugin'));
-    assert.deepEqual(calls.map(call => call.method), ['backgroundConfigure', 'backgroundStart', 'backgroundStop', 'backgroundStop', 'backgroundGetStatus', 'backgroundClearEvents', 'backgroundPreflight']);
-    assert.deepEqual(calls.map(call => call.args), [[configuration], [{}], [{ disarm: true }], [{ disarm: false }], [{}], [{}], [{}]]);
+    await bridge.setSession();
+    await bridge.prepareAccessorySetup();
+    await bridge.finishAccessorySetup();
+    assert.deepEqual(calls.map(call => call.service), Array(10).fill('BluetoothLePlugin'));
+    assert.deepEqual(calls.map(call => call.method), ['backgroundConfigure', 'backgroundStart', 'backgroundStop', 'backgroundStop', 'backgroundGetStatus', 'backgroundClearEvents', 'backgroundPreflight', 'backgroundSetSession', 'backgroundPrepareAccessorySetup', 'backgroundFinishAccessorySetup']);
+    assert.deepEqual(calls.map(call => call.args), [[configuration], [{}], [{ disarm: true }], [{ disarm: false }], [{}], [{}], [{}], [{}], [{}], [{}]]);
     delete global.cordova;
 });
 

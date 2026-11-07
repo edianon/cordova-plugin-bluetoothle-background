@@ -6,6 +6,45 @@ The app supplies the device UUID, GATT UUIDs, packet format, matching rules, ack
 
 This is an initial implementation. Automated protocol tests and native compile checks are available; the standalone package still needs physical iPhone testing in a host app before release.
 
+## iOS native recovery (0.3.0)
+
+Recovery is opt-in. Continue to initialize the existing BluetoothLE plugin, then supply a signed-in session and the same scope in configuration:
+
+```ts
+const session = { accountId: signedInAccountId, expiresAt: credentialExpiryUnixSeconds };
+await background.setSession(session);
+await background.configure({ ...configuration, restoration: session });
+await background.start();
+// At logout, account invalidation, or a provider/non-patient login:
+await background.setSession();
+```
+
+The plugin supplies a stable manager restoration identifier even when JavaScript doesn't pass `restoreKey`. It replaces that option intentionally. Add `[BLEBackgroundPlugin restoreAtLaunch:launchOptions]` at the beginning of the native app delegate's `didFinishLaunchingWithOptions`, before webview/JavaScript startup. Swift hosts call `BLEBackgroundPlugin.restore(atLaunch: launchOptions ?? [:])`. Smarthealth's tracked iOS setup script installs this call; other hosts must add it explicitly. Registration is also marked `onload`, but onload alone is not an early launch implementation. Cordova's prepare hook configures registration/background mode; it does not rewrite arbitrary host app delegates.
+
+The launch entry point recreates the **same process-wide plugin instance and superclass-owned manager** used by Cordova whenever secure armed recovery is valid. Scene-based apps receive nil launch options; the deprecated Bluetooth launch key is not required. Missing or invalid recovery creates no early manager unless a legacy explicit restoration hint requires orphan cleanup. Recovery reloads an armed, unexpired account-bound configuration from Keychain, binds restored peripheral delegates and cached GATT objects before notifications arrive, retains pending connections, resumes missing discovery/subscription steps, and cancels unrelated restored work. Duplicate discovery/subscription requests are gated. No Angular initialization, dashboard callbacks or JavaScript packet processing is required. Native recovery retains ownership while backgrounded or initially inactive until foreground lifecycle entry; explicit disable/logout still revokes it. The caller must await native `suspend()` before foreground BLE initialization after a cold restore, as well as on normal resume. Foreground initialization of the early manager waits through unknown/resetting states and transient disabled results before invoking the original parent's callback.
+
+Configuration/headers/body and incident claims are held in one atomic Keychain item using `AfterFirstUnlockThisDeviceOnly`. They are excluded from normal file persistence/backup/synchronization. An installation marker prevents old Keychain state being recovered after reinstall. `stop()` and session invalidation block recovery in defaults before deleting the item, so a deletion failure cannot revive a disabled configuration. Do not log in to another account without synchronizing the native session. Configured credential expiry remains bounded by its original preparation time; session renewal cannot extend stale headers. There is no native login/token refresh. Expired or inaccessible recovery fails closed. Started HTTP tasks are cancelled on disable/account invalidation; cancellation cannot retract a request already accepted by the server.
+
+The protocol engine persists its incident claim and ACK-attempt count before either side effect. Recovery suppresses another POST for that claim even when termination interrupted the first request. It does not retry delivery. This is **at-most-once local submission**, not exactly-once server delivery: death after the claim but before POST can lose delivery, and an interrupted POST has an unknown outcome. A backend idempotency contract is needed to retry that safely; none is invented. Incident persistence failure suppresses both ACK and POST until a retransmission can be claimed.
+
+After process death an unresolved saved incident retains its identity and HTTP claim regardless of downtime. Successful ACK completion is saved separately: when that marker is present and the configured quiet interval has elapsed on the same monotonic uptime, a later matching frame starts a new incident with its own bounded ACK budget and one HTTP claim. Queued repetitions within the quiet interval remain deduplicated. Legacy snapshots without the completion marker, failed completion persistence, and a backward uptime after reboot retain the conservative first-frame policy; without a device-supplied event ID this can merge a new alert with an unresolved older one. No uncertain HTTP is replayed. `delivery_deduplicated` explains first-frame suppression after restoration. Live compatible reconfiguration preserves timing; explicit disable followed by configuration clears the old incident history.
+
+`restorationSupported` describes implementation support, and `recoveryArmed` describes persisted eligibility. Neither means the OS will launch the app. System termination/crash recovery needs a pending Core Bluetooth operation and matching event. User swipe-away requires an accessory set up through AccessorySetupKit on iOS 26+. The reusable sibling AccessorySetupKit plugin owns authorization only; all connections, subscriptions, packet processing, ACK and HTTP stay here. Hosts must follow Apple's migration-before-any-central requirement if they choose migration. Ordinary background operation and older iOS remain available. Powered-off Bluetooth, range loss, locked-before-first-unlock Keychain access, network failure, and OS execution limits still prevent reception/delivery.
+
+ASK changes foreground discovery permissions as well: Core Bluetooth scans return only accessories authorized to that app. Hosts that previously scanned arbitrary nearby measurement devices must plan authorization/migration for those devices too. Disarming this plugin does not expand system Bluetooth permissions. Restored work that should not continue is cancelled only after the central becomes powered on; issuing that command inside an earlier unknown-state restoration callback can leave a rejected cancellation and a connected peripheral that no longer advertises.
+
+References: [Apple restoration guide](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html), [TN3115](https://developer.apple.com/documentation/technotes/tn3115-bluetooth-state-restoration-app-relaunch-rules), [AccessorySetupKit setup/migration](https://developer.apple.com/documentation/accessorysetupkit/discovering-and-configuring-accessories).
+
+### AccessorySetupKit handoff
+
+Before the host shows the system picker, acquire its foreground BLE lease, then await `prepareAccessorySetup()`. This stops scanning, waits for all foreground/native disconnections, detaches delegates and releases this plugin's central manager. It retains native ownership so late JavaScript calls cannot recreate a manager while the picker is active. A scan stop or disconnect alone is insufficient: an alive global-permission CBManager causes iOS error 550, `CBManagers active with global permissions`.
+
+In a `finally` block after the picker succeeds, fails or is cancelled, await `finishAccessorySetup()`. It recreates one shared manager using the stable restoration identifier and waits for a usable Bluetooth state before releasing ownership. A failure retains the host's lease; use explicit Disable/recovery before restarting measurements. No second active manager is introduced, and pending ACK/HTTP work is not mistaken for picker success.
+
+The host must also coordinate any other Bluetooth plugins. Smarthealth changes only the generated iOS BluetoothSerial registration to lazy loading; legacy Serial features remain registered and initialize when called. If another feature has already created a separate global manager in the current process, restart the app before authorization. This companion cannot safely destroy an unrelated plugin's live manager or use its private fields.
+
+Apple's ASK authorization changes discovery to an accessory-specific permission model. Other previously used peripherals may require migration/authorization too. The fixed handoff does not establish compatibility with every legacy measurement device, and new-device discovery/foreground measurements must be physically checked after authorization. The plugin does not silently authorize or migrate other accessories.
+
 ## iOS behavior
 
 1. Discover/connect to the chosen peripheral through the existing BluetoothLE plugin in the foreground. Initialize Bluetooth before arming this companion.
@@ -18,6 +57,14 @@ This is an initial implementation. Automated protocol tests and native compile c
 Late foreground commands are rejected during native ownership. Takeover disconnects pending foreground requests rather than passing matched notifications into their response callbacks. The app should cancel its own pending transactions and reconnect loops on pause, and restart them only after `suspend()` resolves. A failed `suspend()` means ownership may still be retained; inspect status or retry before restarting foreground BLE.
 
 Only one configured peripheral is monitored. This companion does not coexist with another custom subclass registered as `BluetoothLePlugin`, another background owner, or another BLE plugin trying to control the same peripheral. The original plugin source is not patched, forked or copied. Version 6.7.4 is deliberately pinned because the subclass uses its protected native connection state.
+
+### Reconnecting after range loss
+
+If the configured peripheral disconnects during active background monitoring, the plugin requests a connection using its cached iOS UUID. Core Bluetooth can keep the request pending while the app is suspended and complete it when the peripheral returns within range and accepts connections. After reconnecting, the plugin discovers the configured characteristics as needed and restores the notification subscription. The existing ASK authorization applies to the same peripheral. [Apple's Core Bluetooth restoration guide](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html)
+
+`maxConnectionFailures` defaults to three. The counter advances when Core Bluetooth reports a connection failure through `didFailToConnectPeripheral`. It resets when notifications are enabled or a new background session starts. At the limit, the plugin records `connection_retry_limit` and ends active monitoring. A later foreground-to-background transition can start a fresh attempt if the plugin remains armed and its configuration is valid.
+
+After process termination, reconnection can relaunch the app if iOS preserved the pending connection and allows restoration. Relaunch after a user swipe-away requires an ASK-authorized accessory on iOS 26 or later. Bluetooth must be powered on, the peripheral must be available to connect, and the saved recovery configuration must still be valid. Increasing `maxConnectionFailures` only changes how many failures the plugin tolerates. [Apple's relaunch rules](https://developer.apple.com/documentation/technotes/tn3115-bluetooth-state-restoration-app-relaunch-rules)
 
 ## Install in Cordova
 
@@ -138,7 +185,7 @@ See [types/index.d.ts](types/index.d.ts) for the complete API.
 | `metadata` | Optional JSON object copied into incident events/reports. |
 | `includePayload` | Default false. Opts into storing/reporting received packet bytes. |
 | `maxEvents` | Persisted event ring limit, default 100; range 10–1000. |
-| `maxConnectionFailures` | Default 3; range 1–10 consecutive failed connection attempts. Reset after notification enablement. |
+| `maxConnectionFailures` | Default 3, range 1–10. On iOS, counts Core Bluetooth connection failure callbacks. See [reconnecting after range loss](#reconnecting-after-range-loss) and [Android behavior](#android-setup-and-behavior) for platform details. |
 
 The first version requires the configured notification characteristic to support **Notify** and the command characteristic to support **Write with response**, even for configurations with no acknowledgement. It does not support indication-only characteristics or write-without-response acknowledgement. The OS's successful write callback records BLE acceptance; it cannot prove the peripheral acted on the packet.
 
@@ -152,9 +199,9 @@ Each rule gets a locally generated `incidentId`. Repeated matching packets withi
 
 A repeat may request another acknowledgement after the previous write finishes, whether that write failed or succeeded, up to `maxAttempts`. This covers retransmissions when the peripheral did not act on an apparently successful write. No immediate timer-based retransmission is sent. After a timeout, the native connection is retired before another write can use it.
 
-After at least `quietPeriodMs` without that rule's packets and no pending acknowledgement, the next match creates a new incident and a fresh attempt budget. Stream resets preserve deduplication state; reconfiguration or process death clears it.
+After at least `quietPeriodMs` without that rule's packets and no pending acknowledgement, the next match creates a new incident and a fresh attempt budget. Stream resets preserve deduplication state. Opt-in iOS recovery also preserves it across compatible reconfiguration and process death; Android and non-recovery configurations remain in memory.
 
-**This is a heuristic, not a protocol event ID.** A disconnect or radio gap longer than the quiet period can cause one physical incident to be treated as two; separate incidents close together can be merged. Choose a boundary appropriate to the actual peripheral. The host backend should use the local `incidentId` for idempotency when suitable, but it cannot identify the same physical incident across reconfiguration/process death. There is no durable delivery queue or automatic delivery retry in this version.
+**This is a heuristic, not a protocol event ID.** A disconnect or radio gap longer than the quiet period can cause one physical incident to be treated as two; separate incidents close together can be merged. Choose a boundary appropriate to the actual peripheral. The host backend may use the local `incidentId` for idempotency when suitable. iOS recovery keeps the claimed local identity, but it cannot establish a unique physical event identity without peripheral support. There is no durable delivery queue or automatic delivery retry in this version.
 
 ## Optional HTTP reporting
 
@@ -200,17 +247,17 @@ Here `background` is the plugin import and `deviceConfiguration` contains the us
 
 **With a custom body, `preflight()` rejects without sending any request.** A POST to an action endpoint could perform the action just by testing connectivity. Skip that call in the host app; check connectivity separately only through a backend-defined safe mechanism. Default-envelope preflight behavior is unchanged.
 
-The complete configuration is a deep snapshot taken by `configure()`. Request headers and custom body stay in memory and are not added to status events, persisted event history or public OS logs. Changes to the original JavaScript object do not update native configuration; configure again from the foreground after background ownership has ended. The plugin sends the supplied authentication as-is and does not run the app's login/token refresh workflow. No service-specific endpoint, recipient or payload is built into this plugin.
+The complete configuration is a deep snapshot taken by `configure()`. Request headers and custom body are not added to status events, event history or public OS logs. They stay in memory unless opt-in iOS recovery stores them in device-only Keychain. Changes to the original JavaScript object do not update native configuration; configure again from the foreground after background ownership has ended. The plugin sends the supplied authentication as-is and does not run the app's login/token refresh workflow. No service-specific endpoint, recipient or payload is built into this plugin.
 
 `delivery_started` means the request was initiated. `delivery_succeeded` means an HTTP **2xx response** was received. It does not mean a caregiver received an alert or an emergency service was contacted. An HTTP failure, timeout, cancellation, or expiration records `delivery_failed`. With no destination, `delivery_skipped` is recorded. HTTP redirects are rejected so configured headers cannot be forwarded to another destination. On iOS, requests use an ephemeral session and a bounded background execution assertion. Android uses the foreground service and a bounded HTTP executor. Neither is a guaranteed delivery queue.
 
-HTTPS is required by default. A local diagnostic HTTP endpoint also needs `allowInsecureHttp: true` and app-owned ATS/local-network configuration on iOS or domain-specific network-security settings on Android. This package does not weaken ATS or choose a diagnostic hostname automatically. Configuration and authentication headers stay in memory; they are not written to the event file. Do not put secrets into metadata, payloads, or URL query strings.
+HTTPS is required by default. A local diagnostic HTTP endpoint also needs `allowInsecureHttp: true` and app-owned ATS/local-network configuration on iOS or domain-specific network-security settings on Android. This package does not weaken ATS or choose a diagnostic hostname automatically. Configuration and authentication headers stay in memory or opt-in iOS device-only Keychain; they are not written to the event file. Do not put secrets into metadata, payloads, or URL query strings.
 
 ## Status and logs
 
-`getStatus()` returns `available`, `configured`, `armed`, `ownsBluetooth`, `monitoring`, `restorationSupported: false`, and persisted `events`. Important event names distinguish the stages:
+`getStatus()` returns `available`, `configured`, `armed`, `ownsBluetooth`, `monitoring`, `restorationSupported` (true on iOS, false on Android), and persisted `events`. Important event names distinguish the stages:
 
-- `armed`, `background_handoff_started`, `device_connected`, `notifications_enabled`
+- `armed`, `background_handoff_started`, `device_connecting`, `device_connected`, `device_disconnected`, `notifications_enabled`
 - `notification_received`
 - `acknowledgement_queued`, `acknowledgement_started`, `acknowledgement_written`, `acknowledgement_failed`
 - `delivery_started`, `delivery_succeeded`, `delivery_failed`, `delivery_skipped`
@@ -220,9 +267,11 @@ Repeated-notification diagnostics are emitted to the OS log but omitted from the
 
 ## iOS execution limits
 
-Apple's [Core Bluetooth background guide](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html) describes Bluetooth event wakeups when `bluetooth-central` is enabled. This is event-driven native work, not continuous JavaScript execution. Reception needs a connected peripheral with notifications enabled, Bluetooth permission, and an in-range device. Pending connections may reconnect when the peripheral returns; reception is unavailable during that gap.
+With `bluetooth-central` enabled, iOS can wake the app for Bluetooth events. The plugin handles notifications, acknowledgements, and optional HTTP reporting in native code while the WebView is suspended. Reception requires an active connection and notification subscription. See [reconnecting after range loss](#reconnecting-after-range-loss) for how the connection resumes. [Apple's Core Bluetooth background guide](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html)
 
-This version does **not** implement Core Bluetooth state restoration or AccessorySetupKit. It does not restore configuration or arming after process termination. Do not promise reception after swiping the app away, OS termination, a crash, reboot, or power-off, regardless of iOS version. The user must relaunch, configure and arm again. See Apple's [state-restoration relaunch rules](https://developer.apple.com/documentation/technotes/tn3115-bluetooth-state-restoration-app-relaunch-rules) for a possible future lifecycle extension.
+The same native path can handle other notifications that fit the configured packet format and rules. The Smarthealth host currently configures it for SOS. Collecting blood pressure readings in the background would require the relevant watch notifications or command exchange, native measurement handling, and an upload flow that can retain readings for retry. ASK supplies the accessory authorization used by this flow.
+
+iOS 0.3.0 implements opt-in Core Bluetooth recovery as described above. Authorization is provided by the separate AccessorySetupKit plugin. Relaunch and reception depend on Apple's rules and physical validation; they are never guaranteed. Android process recovery remains unimplemented. After expiry, revocation, inaccessible/corrupt recovery, or unrecoverable connection failure, reopen/sign in and prepare a fresh configuration.
 
 Use a physical iPhone/iPad for background testing. Simulator, Mac Catalyst, and iOS apps running on a Mac report `available: false`. Android is implemented separately above; web monitoring is unavailable.
 
@@ -252,14 +301,23 @@ npm uninstall cordova-plugin-bluetoothle-background
 npx cap sync ios
 ```
 
-`--restore` preserves background modes because other features may use them; remove `bluetooth-central` manually only if no longer needed. For Cordova, remove the plugin and run `cordova prepare ios` to regenerate the parent registration. Rebuild after either removal.
+Remove the native `restoreAtLaunch` call/import when uninstalling this package. `--restore` preserves background modes because other features may use them; remove `bluetooth-central` manually only if no longer needed. For Cordova, remove the plugin and run `cordova prepare ios` to regenerate the parent registration. Rebuild after either removal.
 
 To publish on GitHub, put this directory's contents in your chosen repository, including tests and examples. No remote URL or account name is embedded. The package is MIT licensed; review the license and version before making a public release.
 
 
 ## Versions
 
-v0.2.0
+### v0.3.0 — iOS native recovery (unpublished)
+
+- Restore pending connections and notification subscriptions at native launch using a stable Core Bluetooth restoration identifier.
+- Save account-scoped recovery configuration and incident state in the device-only Keychain, with credential expiry and revocation on disable or logout.
+- Coordinate the shared Bluetooth manager with AccessorySetupKit authorization and the handoff back to foreground scanning.
+- Preserve incident deduplication, acknowledgement attempt counts, and HTTP submission claims across relaunch.
+- Add native tests for restoration, Bluetooth ownership, and recovery policy.
+
+### v0.2.0
+
 feat(android): add native background BLE monitoring and SOS support
 
 - Add connected-device foreground service with exclusive BLE handoff
@@ -267,3 +325,5 @@ feat(android): add native background BLE monitoring and SOS support
 - Add Android setup helpers, tests and documentation
 - Preserve existing iOS behavior
 - Bump version to 0.2.0
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed changes and earlier versions.

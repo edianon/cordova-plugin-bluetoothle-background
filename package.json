@@ -1,6 +1,6 @@
 {
   "name": "cordova-plugin-bluetoothle-background",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Configurable native iOS and Android background BLE notification matching, acknowledgement and HTTP reporting.",
   "main": "www/bluetoothle-background.js",
   "types": "types/index.d.ts",

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 — iOS native recovery (unpublished)
+
+- Add native launch bootstrap and a process-wide Cordova/shared-manager instance with a stable Core Bluetooth restoration identifier.
+- Recreate the shared central from valid armed recovery on scene-based launches with nil/empty launch options; retain native ownership during inactive recovery and await settled early-manager state before foreground initialization.
+- Persist successful ACK completion so later alerts after the quiet interval receive a new incident/HTTP claim across relaunch, while unresolved and immediate repeated packets remain deduplicated. Explicit disable/reconfigure resets the previous ledger.
+- Defer restored scan/peripheral cleanup until powered-on state so disabled SOS cannot leave a rejected orphan connection cancellation. Protect foreground handoff from late inactive restoration and record foreground scan/discovery checkpoints.
+- Restore matching peripheral delegates, cached GATT state, pending connections and subscriptions; gate duplicate discovery/subscription requests and protect native ownership from cold background WebView startup.
+- Add opt-in device-only Keychain configuration/incident recovery, account and credential-expiry scoping, disable/logout revocation, and durable at-most-once local submission claims with bounded ACK attempts across relaunch.
+- Expose iOS session synchronization and shared-manager quiescence for a separate AccessorySetupKit integration. No AccessorySetupKit or device-specific configuration is embedded in this plugin.
+- Add mocked native restoration/ownership and recovery-policy tests. Android source and configuration are unchanged. Physical relaunch validation remains pending.
+
+
 ## 0.2.0 — Android background monitoring
 
 - Add Android native configurable framing, incident deduplication, serialized bounded ACK writes, and one HTTP POST per incident with the existing JavaScript API. Keep all iOS native sources unchanged.

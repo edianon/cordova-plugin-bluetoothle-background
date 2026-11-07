@@ -22,3 +22,7 @@ exports.suspend = function () { return call('backgroundStop', { disarm: false })
 exports.getStatus = function () { return call('backgroundGetStatus'); };
 exports.clearEvents = function () { return call('backgroundClearEvents'); };
 exports.preflight = function () { return call('backgroundPreflight'); };
+// iOS only. Empty session revokes recovery, including when no UI/service exists.
+exports.setSession = function (session) { return call('backgroundSetSession', session); };
+exports.prepareAccessorySetup = function () { return call('backgroundPrepareAccessorySetup'); };
+exports.finishAccessorySetup = function () { return call('backgroundFinishAccessorySetup'); };

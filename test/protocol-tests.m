@@ -221,9 +221,115 @@ static void testValidation(void) {
     check([engine.configuration[@"reporting"][@"body"][@"nested"][@"subject"] isEqual:@"original subject"], @"custom body is a deep snapshot of foreground data");
 }
 
+static void testDurableRecovery(void) {
+    NSMutableDictionary *config = mutableConfiguration();
+    config[@"reporting"] = @{@"url":@"https://example.invalid/test"};
+    Harness *first = [[Harness alloc] initWithConfiguration:config];
+    __block NSDictionary *saved;
+    first.engine.persistIncidents = ^BOOL(NSDictionary *snapshot) { saved = snapshot; return YES; };
+    [first receive:packet(0x42) time:100];
+    check(saved.count == 1, @"incident claim is durable before side effects");
+    check(first.deliveries.count == 1, @"first process submits once");
+    Harness *live = [[Harness alloc] initWithConfiguration:config];
+    check([live.engine restoreIncidents:saved afterRelaunch:NO], @"live reconfiguration preserves timing");
+    [live receive:packet(0x42) time:200];
+    check(live.deliveries.count == 1, @"later live incident does not acquire a relaunch suppression boundary");
+    NSString *incidentID = first.deliveries[0][@"incidentId"];
+    // Death while ACK/HTTP are pending. The saved attempt remains consumed and
+    // the already claimed HTTP is not replayed, even after a long/reboot gap.
+    Harness *restored = [[Harness alloc] initWithConfiguration:config];
+    check([restored.engine restoreIncidents:saved], @"saved incident restores");
+    restored.engine.persistIncidents = ^BOOL(NSDictionary *snapshot) { saved = snapshot; return YES; };
+    [restored receive:packet(0x42) time:1];
+    check(restored.deliveries.count == 0, @"relaunch does not repeat uncertain HTTP");
+    check(restored.writes.count == 1, @"retransmission resumes bounded ACK attempts");
+    check([restored eventsNamed:@"acknowledgement_started"][0][@"details"][@"attempt"] != nil, @"restored ACK has attempt identity");
+    check([[restored eventsNamed:@"acknowledgement_started"][0][@"details"][@"incidentId"] isEqual:incidentID], @"same incident identity across reboot");
+    [restored finishWrite:failure()];
+    [restored receive:packet(0x42) time:2]; [restored finishWrite:nil];
+    [restored receive:packet(0x42) time:3];
+    check(restored.writes.count == 2, @"attempt bound spans process death");
+    check(restored.deliveries.count == 0, @"HTTP failure/unknown is not automatically retried");
+    [restored receive:packet(0x42) time:10];
+    check(restored.deliveries.count == 1, @"observed quiet boundary permits later incident");
+    check(![restored.deliveries[0][@"incidentId"] isEqual:incidentID], @"later incident has another identity");
+
+    Harness *blocked = [[Harness alloc] initWithConfiguration:config];
+    blocked.engine.persistIncidents = ^BOOL(NSDictionary *snapshot) { return NO; };
+    [blocked receive:packet(0x42) time:0];
+    check(blocked.deliveries.count == 0 && blocked.writes.count == 0, @"failed secure claim prevents ACK and POST");
+    blocked.engine.persistIncidents = ^BOOL(NSDictionary *snapshot) { saved = snapshot; return YES; };
+    [blocked receive:packet(0x42) time:1];
+    check(blocked.deliveries.count == 1 && blocked.writes.count == 1, @"a retransmission can recover from transient storage failure");
+    Harness *afterClaim = [[Harness alloc] initWithConfiguration:config];
+    check([afterClaim.engine restoreIncidents:saved], @"recovered claim is valid");
+    [afterClaim receive:packet(0x42) time:1000];
+    check(afterClaim.deliveries.count == 0, @"recovered storage failure marker cannot replay HTTP");
+    check(![afterClaim.engine restoreIncidents:@{@"example":@{@"attempts":@0}}], @"malformed ledger fails closed");
+}
+
+static void testAcknowledgedIncidentRecovery(void) {
+    NSMutableDictionary *config = mutableConfiguration();
+    config[@"reporting"] = @{@"url":@"https://example.invalid/test"};
+    for (NSString *outcome in @[@"success", @"failed", @"unknown"]) {
+        Harness *first = [[Harness alloc] initWithConfiguration:config];
+        __block NSDictionary *saved;
+        first.engine.persistIncidents = ^BOOL(NSDictionary *snapshot) { saved = snapshot; return YES; };
+        [first receive:packet(0x42) time:100];
+        check(![saved[@"example"][@"acknowledged"] boolValue], @"a durable write attempt is not successful ACK completion");
+        [first finishWrite:nil];
+        check([saved[@"example"][@"acknowledged"] boolValue], @"successful ACK completion is durable");
+        if (![outcome isEqual:@"unknown"]) {
+            void (^complete)(NSError *) = first.deliveryCompletions.firstObject;
+            complete([outcome isEqual:@"failed"] ? failure() : nil);
+        }
+        NSDictionary *completed = saved;
+        NSString *oldID = completed[@"example"][@"incidentId"];
+        Harness *immediate = [[Harness alloc] initWithConfiguration:config];
+        check([immediate.engine restoreIncidents:completed], @"ACK-completed snapshot restores");
+        [immediate receive:packet(0x42) time:101];
+        check(immediate.deliveries.count == 0 && immediate.writes.count == 1, @"queued repetitions within the quiet interval remain deduplicated after relaunch");
+        check([immediate eventsNamed:@"delivery_deduplicated"].count == 1, @"restored suppression is visible independently of ACK");
+        Harness *later = [[Harness alloc] initWithConfiguration:config];
+        check([later.engine restoreIncidents:completed], @"later alert recovers completed snapshot");
+        later.engine.persistIncidents = ^BOOL(NSDictionary *snapshot) { saved = snapshot; return YES; };
+        [later receive:packet(0x42) time:110];
+        check(later.deliveries.count == 1 && ![later.deliveries[0][@"incidentId"] isEqual:oldID],
+            [outcome stringByAppendingString:@" prior HTTP does not suppress a distinct alert after successful ACK and quiet interval"]);
+        check([saved[@"example"][@"attempts"] unsignedIntegerValue] == 1, @"later incident starts its own bounded ACK budget");
+        [later receive:packet(0x42) time:111];
+        check(later.deliveries.count == 1 && later.writes.count == 1, @"new incident's in-flight retransmission cannot duplicate POST or ACK");
+        [later finishWrite:nil];
+        Harness *again = [[Harness alloc] initWithConfiguration:config];
+        check([again.engine restoreIncidents:saved], @"new completed claim survives another relaunch");
+        [again receive:packet(0x42) time:112];
+        check(again.deliveries.count == 0, @"another process cannot replay the new incident within its quiet interval");
+        Harness *reboot = [[Harness alloc] initWithConfiguration:config];
+        check([reboot.engine restoreIncidents:completed], @"completion marker is accepted after an uptime reset");
+        [reboot receive:packet(0x42) time:1];
+        check(reboot.deliveries.count == 0, @"backward uptime does not manufacture a quiet boundary");
+    }
+    Harness *failedAck = [[Harness alloc] initWithConfiguration:config];
+    __block NSDictionary *unresolved;
+    __block BOOL failSave = NO;
+    failedAck.engine.persistIncidents = ^BOOL(NSDictionary *snapshot) { if (failSave) return NO; unresolved = snapshot; return YES; };
+    [failedAck receive:packet(0x42) time:100]; [failedAck finishWrite:failure()];
+    check(![unresolved[@"example"][@"acknowledged"] boolValue], @"failed ACK cannot close the restored incident");
+    Harness *unknown = [[Harness alloc] initWithConfiguration:config];
+    check([unknown.engine restoreIncidents:unresolved], @"unresolved or legacy snapshot remains compatible");
+    [unknown receive:packet(0x42) time:1000];
+    check(unknown.deliveries.count == 0, @"unresolved HTTP claim stays deduplicated even across a long offline gap");
+    [failedAck receive:packet(0x42) time:101]; failSave = YES; [failedAck finishWrite:nil];
+    check([failedAck eventsNamed:@"incident_completion_persistence_failed"].count == 1 &&
+        ![[failedAck.engine incidentSnapshot][@"example"][@"acknowledged"] boolValue], @"completion persistence failure keeps conservative in-memory recovery state");
+    NSMutableDictionary *bad = [unresolved mutableCopy];
+    NSMutableDictionary *entry = [bad[@"example"] mutableCopy]; entry[@"acknowledged"] = @"yes"; bad[@"example"] = entry;
+    check(![unknown.engine restoreIncidents:bad], @"malformed completion marker fails closed");
+}
+
 int main(void) {
     @autoreleasepool {
-        testFraming(); testRetriesAndBoundaries(); testDelivery(); testRulesAndSerialization(); testValidation();
+        testFraming(); testRetriesAndBoundaries(); testDelivery(); testRulesAndSerialization(); testValidation(); testDurableRecovery(); testAcknowledgedIncidentRecovery();
         printf("Native packet/incident tests passed (%lu checks). No Bluetooth or network used.\n", (unsigned long)checks);
     }
     return 0;

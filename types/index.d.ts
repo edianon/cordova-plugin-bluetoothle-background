@@ -29,11 +29,16 @@ export interface Configuration {
         /** Default 8000; 100–30000. One POST per incident, no automatic retries. */
         timeoutMs?: number;
     };
-    /** Default 100; 10–1000. Configuration and HTTP headers are never persisted. */
+    /** Default 100; 10–1000. Event files exclude configuration/HTTP headers; opt-in iOS recovery stores them in Keychain. */
     maxEvents?: number;
     /** Default 3; 1–10. Consecutive failures reset when notifications are enabled. */
     maxConnectionFailures?: number;
+    /** iOS only, opt-in device-only Keychain recovery. Must match setSession().
+     * expiresAt is the prepared credential expiry in Unix seconds. */
+    restoration?: Session;
 }
+
+export interface Session { accountId: string; expiresAt: number; }
 
 export interface NotificationRule {
     id: string;
@@ -62,14 +67,20 @@ export interface BackgroundEvent {
 }
 
 export interface Status {
+    /** iOS: remains true even after releasing the manager; migration must precede first initialization. */
+    managerInitializedInProcess?: boolean;
     available: boolean;
     configured: boolean;
     armed: boolean;
     ownsBluetooth: boolean;
     monitoring: boolean;
     events: BackgroundEvent[];
-    /** This version supports background execution, not process restoration. */
-    restorationSupported: false;
+    /** iOS supports native recovery. Eligibility and actual relaunch remain OS/device dependent. */
+    restorationSupported: boolean;
+    recoveryArmed?: boolean;
+    restored?: boolean;
+    /** Configured iOS peripheral identifier; no credentials or request body. */
+    deviceId?: string;
 }
 
 export function configure(configuration: Configuration): Promise<Status>;
@@ -79,6 +90,13 @@ export function stop(): Promise<Status>;
 export function suspend(): Promise<Status>;
 export function getStatus(): Promise<Status>;
 export function clearEvents(): Promise<Status>;
+/** iOS only. Clear on logout/account invalidation. Does not arm monitoring. */
+export function setSession(session?: Session): Promise<Status>;
+/** iOS only. Disconnect and release the shared manager before accessory setup.
+ * Host must hold its BLE lease and call finishAccessorySetup() after success or cancellation. */
+export function prepareAccessorySetup(): Promise<Status>;
+/** iOS only. Recreate the shared manager after the picker ends; waits for Bluetooth state. */
+export function finishAccessorySetup(): Promise<Status>;
 /** Optional foreground POST check for the default incident envelope.
  * Rejects without sending if reporting.body is configured. Does not start BLE. */
 export function preflight(): Promise<{ statusCode: number }>;
